@@ -5,11 +5,24 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 import os
 from pathlib import Path
+from typing import Optional
+import jwt
+from datetime import datetime, timedelta
+
+from auth import verify_teacher
+
+# Authentication settings
+SECRET_KEY = "your-secret-key-here"  # In production, use environment variable
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
@@ -18,6 +31,47 @@ app = FastAPI(title="Mergington High School API",
 current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
+
+async def get_current_teacher(token: Optional[str] = Depends(oauth2_scheme)) -> Optional[dict]:
+    """Get the current authenticated teacher from the token."""
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return {'username': payload.get('sub'), 'name': payload.get('name')}
+    except jwt.PyJWTError:
+        return None
+
+def create_access_token(data: dict):
+    """Create a JWT token for the teacher."""
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+@app.post("/token")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    """Login endpoint for teachers."""
+    teacher = verify_teacher(form_data.username, form_data.password)
+    if not teacher:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    access_token = create_access_token(
+        data={"sub": teacher["username"], "name": teacher["name"]}
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.get("/auth/me")
+async def get_me(teacher: Optional[dict] = Depends(get_current_teacher)):
+    """Get current authenticated teacher."""
+    if not teacher:
+        return JSONResponse(status_code=401, content={"authenticated": False})
+    return {"authenticated": True, "teacher": teacher}
 
 # In-memory activity database
 activities = {
@@ -89,8 +143,19 @@ def get_activities():
 
 
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
-    """Sign up a student for an activity"""
+async def signup_for_activity(
+    activity_name: str, 
+    email: str, 
+    teacher: Optional[dict] = Depends(get_current_teacher)
+):
+    """Sign up a student for an activity (teachers only)"""
+    # Validate teacher is authenticated
+    if not teacher:
+        raise HTTPException(
+            status_code=401,
+            detail="Only teachers can register students"
+        )
+
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
@@ -111,8 +176,19 @@ def signup_for_activity(activity_name: str, email: str):
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
-    """Unregister a student from an activity"""
+async def unregister_from_activity(
+    activity_name: str, 
+    email: str,
+    teacher: Optional[dict] = Depends(get_current_teacher)
+):
+    """Unregister a student from an activity (teachers only)"""
+    # Validate teacher is authenticated
+    if not teacher:
+        raise HTTPException(
+            status_code=401,
+            detail="Only teachers can unregister students"
+        )
+
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
