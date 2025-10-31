@@ -3,11 +3,24 @@ document.addEventListener("DOMContentLoaded", () => {
   const activitySelect = document.getElementById("activity");
   const signupForm = document.getElementById("signup-form");
   const messageDiv = document.getElementById("message");
+  
+  // Auth elements
+  const loginButton = document.getElementById("login-button");
+  const logoutButton = document.getElementById("logout-button");
+  const loginModal = document.getElementById("login-modal");
+  const loginForm = document.getElementById("login-form");
+  const loginMessage = document.getElementById("login-message");
+  const teacherInfo = document.getElementById("teacher-info");
+  
+  let authToken = localStorage.getItem("authToken");
+  
+  // Check if user is already logged in
+  checkAuthStatus();
 
   // Function to fetch activities from API
   async function fetchActivities() {
     try {
-      const response = await fetch("/activities");
+      const response = await fetchWithAuth("/activities");
       const activities = await response.json();
 
       // Clear loading message
@@ -74,7 +87,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const email = button.getAttribute("data-email");
 
     try {
-      const response = await fetch(
+      const response = await fetchWithAuth(
         `/activities/${encodeURIComponent(
           activity
         )}/unregister?email=${encodeURIComponent(email)}`,
@@ -118,7 +131,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const activity = document.getElementById("activity").value;
 
     try {
-      const response = await fetch(
+      const response = await fetchWithAuth(
         `/activities/${encodeURIComponent(
           activity
         )}/signup?email=${encodeURIComponent(email)}`,
@@ -154,6 +167,112 @@ document.addEventListener("DOMContentLoaded", () => {
       console.error("Error signing up:", error);
     }
   });
+
+  // Auth functions
+  async function checkAuthStatus() {
+    if (!authToken) {
+      updateUIForLoggedOut();
+      return;
+    }
+
+    try {
+      const response = await fetch("/auth/me", {
+        headers: {
+          "Authorization": `Bearer ${authToken}`
+        }
+      });
+      const data = await response.json();
+
+      if (data.authenticated) {
+        updateUIForLoggedIn(data.teacher);
+      } else {
+        updateUIForLoggedOut();
+      }
+    } catch (error) {
+      console.error("Auth check failed:", error);
+      updateUIForLoggedOut();
+    }
+  }
+
+  function updateUIForLoggedIn(teacher) {
+    loginButton.style.display = "none";
+    logoutButton.style.display = "inline-block";
+    teacherInfo.style.display = "inline-block";
+    teacherInfo.textContent = `Welcome, ${teacher.name}`;
+    document.querySelectorAll(".delete-btn").forEach(btn => btn.style.display = "inline-block");
+    signupForm.style.display = "block";
+  }
+
+  function updateUIForLoggedOut() {
+    authToken = null;
+    localStorage.removeItem("authToken");
+    loginButton.style.display = "inline-block";
+    logoutButton.style.display = "none";
+    teacherInfo.style.display = "none";
+    teacherInfo.textContent = "";
+    document.querySelectorAll(".delete-btn").forEach(btn => btn.style.display = "none");
+    signupForm.style.display = "none";
+  }
+
+  // Event Listeners for Auth
+  loginButton.addEventListener("click", () => {
+    loginModal.classList.add("visible");
+  });
+
+  loginModal.addEventListener("click", (e) => {
+    if (e.target === loginModal) {
+      loginModal.classList.remove("visible");
+    }
+  });
+
+  loginForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const username = document.getElementById("username").value;
+    const password = document.getElementById("password").value;
+
+    try {
+      const response = await fetch("/token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        authToken = data.access_token;
+        localStorage.setItem("authToken", authToken);
+        loginModal.classList.remove("visible");
+        loginForm.reset();
+        checkAuthStatus();
+      } else {
+        loginMessage.textContent = data.detail || "Login failed";
+        loginMessage.className = "error";
+        loginMessage.classList.remove("hidden");
+      }
+    } catch (error) {
+      loginMessage.textContent = "Login failed. Please try again.";
+      loginMessage.className = "error";
+      loginMessage.classList.remove("hidden");
+    }
+  });
+
+  logoutButton.addEventListener("click", () => {
+    updateUIForLoggedOut();
+  });
+
+  // Update fetch functions to include auth token
+  async function fetchWithAuth(url, options = {}) {
+    if (authToken) {
+      options.headers = {
+        ...options.headers,
+        "Authorization": `Bearer ${authToken}`
+      };
+    }
+    return fetch(url, options);
+  }
 
   // Initialize app
   fetchActivities();
